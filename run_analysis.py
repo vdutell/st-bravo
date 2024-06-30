@@ -19,8 +19,7 @@ import utils.bag_alignment as bag
 import utils.gaze_map_matlab.launch_calibration as launch_calibration
 import utils.convert_pldata as conpl
 
-def run_analysis(analysis_base_dir,
-                 trial_list_path, line_number, 
+def run_analysis(trial_list_path, line_number, 
                  skip_convert_png=True,
                  skip_bag_align=False,
                  skip_calibration=False,
@@ -31,7 +30,6 @@ def run_analysis(analysis_base_dir,
     '''
     Mother script to run analysis of a single trial (line from excel trial_list.csv spreadsheet)
     Params:
-        analysis_base_dir(str): path for outputting analysis data (/hmet_analysis or /hmet_analysis_2)
         trial_list_path(str): Path to csv file with trial info
         line_number(int): which line/trial to analyze from trial_list
         skip_convert_png(bool): do we need to convert to pngs?
@@ -87,6 +85,13 @@ def run_analysis(analysis_base_dir,
         print('Skipping this trial because skip boolean is True')
         return()
     
+    #automatically figure out the analysis folder
+    if(subject_name in ['dd','ad']):
+       analysis_base_dir = '/hmet_analysis'
+    else:
+       analysis_base_dir = '/hmet_analysis_2'
+    print(f'This is Subject {subject_name}, analysis folder {analysis_base_dir}')
+    
     print(f'Skipping Gaze Dependencies? {skip_gaze_dependencies}')
     print(type(skip_gaze_dependencies))
 
@@ -117,7 +122,7 @@ def run_analysis(analysis_base_dir,
     #Camera Matrices - distortion, intrinsics, and and extrinsics
     print('Loading Camera Matrix Files (Intrinsics/Extrinsics).')
     #Ximea
-    camera_intrinsics_folder = f'/home/vasha/st-bravo_clean/calibration_info/{aperature_location}'
+    camera_intrinsics_folder = f'/home/vasha/st-bravo/calibration_info/{aperature_location}'
     ximea_distortion = np.loadtxt(os.path.join(camera_intrinsics_folder,'camera2RadialDist.txt'), delimiter=',')
     ximea_distortion = np.array([*ximea_distortion, 0, 0], dtype='float32') #set p1, p2, k3 to zero
     ximea_intrinsics = np.array(np.loadtxt(os.path.join(camera_intrinsics_folder,'Intrinsics_WC.txt'), delimiter=','), dtype='float32')
@@ -181,8 +186,8 @@ def run_analysis(analysis_base_dir,
                                rgb_intrinsics=rsrgb_intrinsics,
                                rgb_to_ximea_rotation=rsrgb_to_ximea_extrinsics_rotation,
                                rgb_to_ximea_translation=rsrgb_to_ximea_extrinsics_translation,
-                                       bag_in_path=f'/home/vasha/st-bravo_analysis/bag/sample_final.bag'
-                                       #bag_in_path=f'/home/vasha/st-bravo_analysis/bag/sample_final-Copy{line_number}.bag'
+                                       bag_in_path=f'/home/vasha/st-bravo/bag/sample_final.bag'
+                                       #bag_in_path=f'/home/vasha/st-bravo/bag/sample_final-Copy{line_number}.bag'
                               )
         ##########################################################################################
         #align depth -> RGB & Ximea for calibrations if it hasn't been done already.
@@ -215,7 +220,7 @@ def run_analysis(analysis_base_dir,
                                rgb_intrinsics=rsrgb_intrinsics,
                                rgb_to_ximea_rotation=rsrgb_to_ximea_extrinsics_rotation,
                                rgb_to_ximea_translation=rsrgb_to_ximea_extrinsics_translation,
-                               bag_in_path=f'/home/vasha/st-bravo_analysis/bag/sample_final-Copy{line_number}.bag' #individual bag per trial avoids i/o problems when runing multiple instances of this function
+                               bag_in_path=f'/home/vasha/st-bravo/bag/sample_final-Copy{line_number}.bag' #individual bag per trial avoids i/o problems when runing multiple instances of this function
                                                   )
                     #remove bag file if it exists
                     #os.remove(calibration_bag_file)
@@ -447,14 +452,20 @@ def run_analysis(analysis_base_dir,
     print(f'All Done with analysis for subject: {subject_name}, task: {task_name}, iter: {task_iter}!')
     
 
+       
+       
+       
+#run like this:
+
+#to do bag alignment only:
+#~/st-bravo$ python ~/st-bravo/run_analysis.py -l 0 -p True -b False -x False -c False -y True -f True
+       
 def main():
     args=sys.argv[1:]
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("-o", "--analysis_path", help="path to analysis (output of this script)", dest="analysis_path", type=str, 
-                        default='/hmet_analysis_2')
     parser.add_argument("-t","--trial_list_path", help="path to csv file containing trial info", dest="trial_list_path", type=str, 
-                        default='~/st-bravo_clean/trial_list.csv')
+                        default='~/st-bravo/trial_list.csv')
     parser.add_argument("-l", "--line_number", help="line number in trial_list to analyze", dest="line_number", type=int)
     parser.add_argument("-p", "--skip_convert_png", help="skip convert ximea .bin to pngs", dest="skip_convert_png", default=True)
     parser.add_argument("-b", "--skip_bag_align", help="skip bag alignment", dest="skip_bag_align", default=False)
@@ -464,11 +475,9 @@ def main():
     parser.add_argument("-y", "--skip_gaze_dependencies", help="dont run code that needs gaze", dest="skip_gaze_dependencies", default=True)
     parser.add_argument("-g", "--gpu_num", help="specify gpu number for cupy (default 0)", dest="gpu_num", type=int,default=0)
     #parser.add_argument("-s", "--stop_time", help="time to stop analysis")
-   
     
     args = parser.parse_args(args)
     print(f'analyzing line {args.line_number} of {args.trial_list_path}')
-    
     print(f'Skipping PNG conversion? {args.skip_convert_png}')
     print(f'Skipping BAG alignment? {args.skip_bag_align}')
     print(f'Skipping Calibration Trial? {args.skip_calibration}')
@@ -476,8 +485,7 @@ def main():
     print(f'Skipping Gaze Dependencies? {args.skip_gaze_dependencies}')
 
     #launch analysis
-    run_analysis(args.analysis_path, 
-                 args.trial_list_path, args.line_number, 
+    run_analysis(args.trial_list_path, args.line_number, 
                  eval(str(args.skip_convert_png)), eval(str(args.skip_bag_align)), 
                  eval(str(args.skip_calibration)), eval(str(args.skip_calib_bag)), eval(str(args.skip_fourier)),
                  eval(str(args.skip_gaze_dependencies)), args.gpu_num)

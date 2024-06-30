@@ -11,14 +11,36 @@ import time
 
 import utils.bins_to_pngs as btp
 
+#VD 6/29/24: added these helper functions to keep running bag alignment until all the frames have been aligned
+#this is needed due to bag alignment STILL dropping frames, but it drops a different set each time, and only 10%. 
+#assuming there are 20,000 files per trial, we'll need to run this about 4-5 times to get them all, but should be fast on later runs. Not the most elegaant, but we spent MONTHS trying to fix this other ways. This at least works.
+#we actually dont need this, we have the dpeth timestamps
+def find_largest_framenum(depth_files_folder):
+    #take off the last part of the path and go to the pngs folder
+    max_frame = 0
+    for f in os.listdir(depth_files_folder):
+        num = f.replace('frame_','').replace('.png','')
+        max_frame = max(max_frame,int(num))
+    print('Total Trial Frames: ', max_frame)
+    return(max_frame)
+          
+def list_missing_frames(expected_num_frames, aligned_frames_folder):
+    #we have the depth timestamps.
+    missing_frames_list = []
+    for i in range(expected_num_frames):
+        fname =os.path.join(aligned_frames_folder,f'depth_frame_{str(i).zfill(8)}.npy')
+        #print(fname)
+        if not os.path.isfile(fname):
+            missing_frames_list.append(i)
+    return(missing_frames_list)
+
+
 ## bug fix VD: fix timing syncronization issue by running a single file at a atime.
-def align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, aligned_rgb_depth_folder, depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims):
-    
-#     mising_frames_list = 
-    
-    
-    #loop through frames out here
-    for i, (t, frame) in enumerate(zip(depth_timestamps, depth_frames)):
+#We run this rersively via the align_dpeth_rsrgb_single funciton below this one.
+def align_depth_rsrgb_single_framelist(frame_list, bag_in_path, bag_out_rgb_path, output_folder, aligned_rgb_depth_folder, depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims):
+   
+    #loop through frames
+    for i, (t, frame, framenum) in enumerate(frame_list):
     
         # .bag file for depth info
         try:
@@ -127,7 +149,8 @@ def align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, align
             bag_in.close()
             bag_out_rgb.close()
         
-            print('Finished Creating Depth -> RGB Bag File')
+            print('*',end='')
+            #print('Finished Creating Depth -> RGB Bag File')
 
         ###########
         #Now use realsense pipeline to read in frames from .bag to run align_to
@@ -152,10 +175,10 @@ def align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, align
             #print(df.get_frame_number(), ts)
             aligned_depth_frame = np.array(df.get_data())
             cv2.imwrite(os.path.join(aligned_rgb_depth_folder,
-                                    f'depth_frame_{str(i).zfill(8)}.png'),
+                                    f'depth_frame_{str(framenum).zfill(8)}.png'),
                        aligned_depth_frame.astype(np.uint16))
             np.save(os.path.join(aligned_rgb_depth_folder,
-                                  f'depth_frame_{str(i).zfill(8)}.npy'),
+                                  f'depth_frame_{str(framenum).zfill(8)}.npy'),
                                   aligned_depth_frame)
             #pipe.stop()
         except Exception as e:
@@ -167,15 +190,52 @@ def align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, align
     return(color_metadata_msg, depth_metadata_msg, depth_to_rgb_rotation_q_message, depth_to_rgb_translation_message)
 
 
-def align_depth_ximea_single(bag_in_path, bag_out_ximea_path, output_folder, aligned_ximea_depth_folder, 
+#Here is where we check for the number of missing frames, then run this over and over until we get all the frames.
+#See functions defined at the top of this file for more info on why we do this.
+def align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, aligned_rgb_depth_folder, depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims):
+    
+    #first create the full list of frames and numbers
+    frame_numbers = list(range(len(depth_timestamps)))
+    full_frame_list = list(zip(depth_timestamps, depth_frames, frame_numbers))
+    #the expected number of frames is the length of this list
+    expected_num_frames = len(depth_timestamps)
+    
+    #then determine how many frames we should have, then figure out how many are missing.
+    missing_frame_list = list_missing_frames(expected_num_frames, aligned_rgb_depth_folder)
+    num_runs = 0
+    
+    print('Full Frame list looks like')
+    print(len(full_frame_list))
+    print(full_frame_list[0])
+    print('Missing frame list looks like')
+    print(len(missing_frame_list))
+    print(missing_frame_list[0])
+    
+    while(len(missing_frame_list) > 0):
+        print(f'Running RGB bag align, this is iteration {num_runs}, with {len(missing_frame_list)} frames left to align.')
+        frame_list = [full_frame_list[i] for i in missing_frame_list]
+        print('New frame list looks like')
+        print(len(frame_list))
+        print(frame_list[0])
+        
+        color_metadata_msg, depth_metadata_msg, depth_to_rgb_rotation_q_message, depth_to_rgb_translation_message = align_depth_rsrgb_single_framelist(frame_list, bag_in_path, bag_out_rgb_path, output_folder, aligned_rgb_depth_folder, depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims)
+        
+        missing_frame_list = list_missing_frames(expected_num_frames, aligned_rgb_depth_folder)
+        num_runs += 1
+    
+    #when all are complete, rerturn
+    return(color_metadata_msg, depth_metadata_msg, depth_to_rgb_rotation_q_message, depth_to_rgb_translation_message)
+
+
+#Like the RSRGB equivalent funiton above, we now run this repeatedly until all the bag files are completed.
+def align_depth_ximea_single_framelist(frame_list, bag_in_path, bag_out_ximea_path, output_folder, aligned_ximea_depth_folder, 
                       depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims, ximea_dims,
                       depth_to_ximea_rotation_q, depth_to_ximea_translation,
                       ximea_intrinsics, ximea_distortion, color_metadata_msg, depth_metadata_msg):
     
-
-    #loop through frames out here
-    for i, (t, frame) in enumerate(zip(depth_timestamps, depth_frames)):
-
+    #loop through frames
+    for i, (t, frame, framenum) in enumerate(frame_list):
+    
         # .bag file for depth info
         try:
             bag_in = rosbag.Bag(bag_in_path)             
@@ -319,10 +379,10 @@ def align_depth_ximea_single(bag_in_path, bag_out_ximea_path, output_folder, ali
             #df = frameset.get_depth_frame() #not aligned - for debugging
             aligned_depth_frame = np.array(df.get_data())
             cv2.imwrite(os.path.join(aligned_ximea_depth_folder,
-                                    f'depth_frame_{str(i).zfill(8)}.png'),
+                                    f'depth_frame_{str(framenum).zfill(8)}.png'),
                        aligned_depth_frame.astype(np.uint16))
             np.save(os.path.join(aligned_ximea_depth_folder,
-                                  f'depth_frame_{str(i).zfill(8)}.npy'),
+                                  f'depth_frame_{str(framenum).zfill(8)}.npy'),
                                    aligned_depth_frame)
         except Exception as e:
             print(f'Failed to read ximea frame {i}:',e)
@@ -335,16 +395,43 @@ def align_depth_ximea_single(bag_in_path, bag_out_ximea_path, output_folder, ali
     return()
 
 
-
-
-
+#Here is where we check for the number of missing frames, then run this over and over until we get all the frames.
+#See functions defined at the top of this file for more info on why we do this.
+def align_depth_ximea_single(bag_in_path, bag_out_ximea_path, output_folder, aligned_ximea_depth_folder, 
+                      depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims, ximea_dims,
+                      depth_to_ximea_rotation_q, depth_to_ximea_translation,
+                      ximea_intrinsics, ximea_distortion, color_metadata_msg, depth_metadata_msg):
+    
+    
+    #first create the full list of frames and numbers
+    frame_numbers = list(range(len(depth_timestamps)))
+    full_frame_list = list(zip(depth_timestamps, depth_frames, frame_numbers))
+    
+    #the expected number of frames is the length of this list
+    expected_num_frames = len(depth_timestamps)
+    
+    #then determine how many frames we should have, then figure out how many are missing.
+    missing_frame_list = list_missing_frames(expected_num_frames, aligned_rgb_depth_folder)
+    num_runs = 0
+    while(len(missing_frame_list) > 0):
+        print(f'Running Ximea bag align, this is iteration {num_runs}, with {len(missing_frame_list)} frames left to align.')
+        frame_list = [full_frame_list[i] for i in missing_frame_list]
+        align_depth_ximea_single_framelist(frame_list, bag_in_path, bag_out_ximea_path, output_folder, aligned_ximea_depth_folder, 
+                      depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims, ximea_dims,
+                      depth_to_ximea_rotation_q, depth_to_ximea_translation,
+                      ximea_intrinsics, ximea_distortion, color_metadata_msg, depth_metadata_msg)
+        missing_frame_list = list_missing_frames(expected_num_frames, aligned_rgb_depth_folder)
+        num_runs += 1
+    
+    #when all are complete, rerturn
+    return()
 
 
 
 def create_aligned_depth_files(recording_folder, output_folder,
                                ximea_distortion, ximea_intrinsics, 
                                rgb_distortion, rgb_intrinsics,
-                               rgb_to_ximea_rotation, rgb_to_ximea_translation, bag_in_path='/home/vasha/st-bravo_analysis/bag/sample_final.bag',
+                               rgb_to_ximea_rotation, rgb_to_ximea_translation, bag_in_path='/home/vasha/st-bravo/bag/sample_final.bag',
                               skip_rgb=False,
                               skip_ximea=False):
     '''
@@ -359,37 +446,21 @@ def create_aligned_depth_files(recording_folder, output_folder,
     
     depth_dims = (848, 480)
     depth_fps = 60
-    #rgb_dims = (1280, 720, 3)
-    #rgb_dims = (1920, 1080, 3)
     rgb_dims = (960,540)
-    #rgb_fps = 30
     ximea_dims = (2064, 1544, 3)
-    #ximea_fps = 200
     #instead of using true ximea and rgb fps, upsample and register just at depth framerate
     ximea_fps = depth_fps
     rgb_fps = depth_fps
     #need rotation matrix as quaternion
     rgb_to_ximea_rotation_q = Rotation.from_dcm(rgb_to_ximea_rotation).as_quat()
-
-#     #remove bag files in case it already exists. If we dont do this, will see a segmentation fault!
-#     try:
-#         os.remove(os.path.join(output_folder,'depth_rgb.bag'))
-#     except OSError:
-#         pass
-#     try:
-#         os.remove(os.path.join(output_folder,'depth_ximea.bag'))
-#     except OSError:
-#         pass
  
-    #file and folder pathss
+    #file and folder paths
     depth_timestamps = list(np.loadtxt(os.path.join(recording_folder,'depth','timestamps.csv')))
-    #depth_timestamps = depth_timestamps[:10] #testing
-    depth_frames = btp.depth_get_all_frames(os.path.join(recording_folder,'depth'))
+    raw_depth_files_folder = os.path.join(recording_folder,'depth')
+    depth_frames = btp.depth_get_all_frames(raw_depth_files_folder)
     depth_frames = depth_frames[:len(depth_timestamps)] #this is a little sus....VD 3/2023
-    #print(len(depth_frames), len(depth_timestamps))
-    #depth_frames = [np.load(os.path.join(recording_folder,'depth',f'depth_frame_{str(f).zfill(8)}.npy')) for f in range(len(depth_timestamps))]
-    
-    #bag_in_path = os.path.join('/home/vasha/st-bravo_analysis','sample_final.bag')
+    #VD 6/29/24: I this this is actually OK because we saved depth in grouped files, for which the last file may be full size and be full of zeros.
+
     bag_out_rgb_path = os.path.join(output_folder,'depth_rgb.bag')
     bag_out_ximea_path = os.path.join(output_folder,'depth_ximea.bag')
         
@@ -399,10 +470,10 @@ def create_aligned_depth_files(recording_folder, output_folder,
     os.makedirs(aligned_ximea_depth_folder, exist_ok=True)
     
     print('Aligning Depth to Realsense RGB')
+
+    #call the function for aligning depth and RGB. Note this will run repeatedly until all frames are aligned.
     color_metadata_msg, depth_metadata_msg, depth_to_rgb_rotation_q_message, depth_to_rgb_translation_message = align_depth_rsrgb_single(bag_in_path, bag_out_rgb_path, output_folder, aligned_rgb_depth_folder, 
                                            depth_timestamps, depth_frames, depth_fps, depth_dims, rgb_dims)
-    #os.remove(os.path.join(output_folder,'depth_rgb.bag'))
-    #os.remove(os.path.join(output_folder,'depth_rgb.bag'))
 
     #convert rgb to depth quaternion to rotation matrix
     depth_to_rgb_rotation = Rotation.from_quat(np.array((depth_to_rgb_rotation_q_message.x,
